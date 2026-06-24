@@ -180,99 +180,104 @@ opts.sys_het  = 0
 
 ## CoCoA+
 
-| Property | Value |
-|----------|----------|
-| Method Type | Distributed primal-dual optimization |
-| Local Solver | SDCA-style coordinate optimization over dual variables α |
-| Infrastructure | Spark local[4] |
+| Item | Details |
+|---|---|
+| Is it mini-batch SGD? | No |
+| Method type | Distributed primal-dual optimization |
+| Local solver | Local SDCA / coordinate ascent over dual variables `alpha` |
+| Distributed setup | Spark `local[4]` |
 | Workers | 4 Spark partitions |
-| Communication | Spark master-worker communication |
-| Aggregation | Workers return Δvₖ = AₖΔαₖ |
+| Communication | Workers compute local updates and send them back through Spark RDD operations |
+| Aggregation | Workers return local model updates; master updates `w ← w + scaling × ΣΔw_k` |
 | Output | Single global SVM model |
 
-### Aggregation Flow
-
-```text
-Worker k
-  ↓
-Δα_k
-  ↓
-Δv_k = A_k Δα_k
-  ↓
-Master Aggregation
-  ↓
-Global Model Update
-```
+In the code, CoCoA+ is run through `CoCoA.runCoCoA(..., plus=true)`. The implementation maintains both primal weights `w` and dual variables `alpha`, which is why objective value and duality gap are available.
 
 ---
 
 ## CoCoA
 
-| Property | Value |
-|----------|----------|
-| Method Type | Distributed primal-dual optimization |
-| Local Solver | SDCA-style coordinate optimization over dual variables α |
-| Infrastructure | Spark local[4] |
+| Item | Details |
+|---|---|
+| Is it mini-batch SGD? | No |
+| Method type | Distributed primal-dual optimization |
+| Local solver | Local SDCA / coordinate ascent over dual variables `alpha` |
+| Distributed setup | Spark `local[4]` |
 | Workers | 4 Spark partitions |
-| Communication | Spark master-worker communication |
-| Aggregation | Aggregated into global state |
+| Communication | Workers compute local dual/primal updates and send them back through Spark |
+| Aggregation | Master sums worker updates and applies scaling to update the global model |
 | Output | Single global SVM model |
+
+In the code, vanilla CoCoA is run through `CoCoA.runCoCoA(..., plus=false)`. It uses the same local SDCA-style solver as CoCoA+, but the aggregation scaling differs from the CoCoA+ mode.
 
 ---
 
 ## Mini-batch Coordinate Descent
 
-| Property | Value |
-|----------|----------|
-| Method Type | Distributed coordinate-descent baseline |
-| Local Solver | Coordinate descent over dual variables |
-| Infrastructure | Spark local[4] |
+| Item | Details |
+|---|---|
+| Is it mini-batch SGD? | No |
+| Method type | Mini-batch coordinate descent / SDCA-style baseline |
+| Local solver | Coordinate updates over dual variables `alpha` |
+| Distributed setup | Spark `local[4]` |
 | Workers | 4 Spark partitions |
-| Communication | Spark master-worker communication |
-| Aggregation | Coordinate updates aggregated globally |
+| Communication | Workers compute mini-batch coordinate updates and return model/dual updates |
+| Aggregation | Master aggregates coordinate updates into a single global model |
 | Output | Single global SVM model |
+
+Mini-batch CD is implemented separately from CoCoA through `MinibatchCD.runMbCD(...)`. Since it maintains dual variables, the implementation reports objective value and duality gap.
 
 ---
 
 ## Mini-batch SGD
 
-| Property | Value |
-|----------|----------|
-| Method Type | Distributed first-order optimization |
-| Local Solver | Mini-batch SGD on primal weights |
-| Infrastructure | Spark local[4] |
+| Item | Details |
+|---|---|
+| Is it mini-batch SGD? | Yes |
+| Method type | Distributed first-order primal optimization |
+| Local solver | Stochastic gradient updates on primal weights `w` |
+| Distributed setup | Spark `local[4]` |
 | Workers | 4 Spark partitions |
-| Communication | Spark master-worker communication |
-| Aggregation | Worker updates averaged into global weights |
+| Communication | Workers compute local stochastic gradient/model updates and return them through Spark |
+| Aggregation | Master sums worker updates and applies a global SGD update |
 | Output | Single global SVM model |
+
+Mini-batch SGD is implemented through `SGD.runSGD(..., local=false)`. It only maintains primal weights `w`, so it reports objective value and test error, but not duality gap.
 
 ---
 
 ## Local SGD
 
-| Property | Value |
-|----------|----------|
-| Method Type | Distributed local-update SGD |
-| Local Solver | Multiple local SGD updates before synchronization |
-| Infrastructure | Spark local[4] |
+| Item | Details |
+|---|---|
+| Is it mini-batch SGD? | Related, but it is the local-update variant |
+| Method type | Local SGD / first-order primal optimization |
+| Local solver | Multiple local SGD updates before synchronization |
+| Distributed setup | Spark `local[4]` |
 | Workers | 4 Spark partitions |
-| Communication | Spark master-worker communication |
-| Aggregation | Local models combined during synchronization |
+| Communication | Workers perform local SGD steps and return local model differences |
+| Aggregation | Master aggregates local model differences into the global model |
 | Output | Single global SVM model |
+
+Local SGD is implemented through `SGD.runSGD(..., local=true)`. Compared with mini-batch SGD, workers perform local updates before synchronization. It only maintains primal weights, so no duality gap is reported.
 
 ---
 
 ## MOCHA
 
-| Property | Value |
-|----------|----------|
-| Method Type | Federated Multitask Learning |
-| Local Solver | SDCA-style coordinate updates |
-| Tasks | 4 |
-| Infrastructure | MATLAB |
-| Communication | Simulated through task partitions |
-| Aggregation | Task relationship matrix Ω |
-| Output | Multiple task-specific models |
+| Item | Details |
+|---|---|
+| Is it mini-batch SGD? | No |
+| Method type | Federated multitask learning |
+| Local solver | SDCA-style coordinate updates |
+| Distributed setup | MATLAB single-machine simulation |
+| Tasks | 4 task partitions |
+| Communication | Simulated through MATLAB task partitions, not Spark/gRPC/TCP |
+| Aggregation | Task-specific models are coupled through the task relationship matrix `Ω` |
+| Output | Multiple task-specific models `w₁, w₂, w₃, w₄` |
+
+Unlike the CoCoA-family methods, MOCHA does not learn one global model. It learns multiple related task-specific models and shares information through the learned task relationship matrix `Ω`.
+
 
 ### Output Models
 
